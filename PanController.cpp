@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -31,6 +32,7 @@
 #endif
 
 #define LOG_TAG "PanController"
+#define READ_BUF_SIZE 600
 #include <cutils/log.h>
 
 #include "PanController.h"
@@ -103,3 +105,123 @@ int PanController::stopPan() {
 bool PanController::isPanStarted() {
     return (mPid != 0 ? true : false);
 }
+
+char* PanController::listConnectedDevices() {
+
+    int pfd[2];
+    pid_t pid;
+    char *buf = NULL;
+    int status;
+
+    buf = (char*) malloc(READ_BUF_SIZE);
+    if (!buf) {
+        LOGE("Could not allocate buffer");
+        return NULL;
+    }
+    memset(buf,'\0',READ_BUF_SIZE);
+
+    if (pipe(pfd) == -1) {
+        LOGE("Could not create pipe");
+        return NULL;
+    }
+    pid = fork();
+    if (pid == -1) {
+        LOGE("Could not fork");
+        return NULL;
+    }
+    if (pid == 0) {
+        close(pfd[0]);
+        dup2(pfd[1], STDOUT_FILENO);
+        if (execl("/system/bin/pand","/system/bin/pand","--show", (char *) NULL)) {
+            LOGE("execl failed (%s)", strerror(errno));
+        }
+        LOGE("Should never get here!");
+    }
+
+    waitpid (pid, &status, 0);
+    if(!WIFEXITED(status)) {
+        if (WIFEXITED(status)) {
+            LOGD("exited, status=%d\n", WEXITSTATUS(status));
+        } else if (WIFSIGNALED(status)) {
+            LOGD("killed by signal %d\n", WTERMSIG(status));
+        } else if (WIFSTOPPED(status)) {
+            LOGD("stopped by signal %d\n", WSTOPSIG(status));
+        }
+    }
+
+    close(pfd[1]);
+    read(pfd[0], &buf[0], READ_BUF_SIZE-1);
+    LOGD("Pand show:(%s)", &buf[0]);
+    close(pfd[0]);
+
+    while (!WIFEXITED(status) && !WIFSIGNALED(status)) {
+        int w;
+        w = waitpid(pid, &status, WUNTRACED | WCONTINUED);
+        if (w == -1) {
+            LOGD("error waitpid");
+            break;
+        }
+        if (WIFEXITED(status)) {
+            LOGD("exited, status=%d\n", WEXITSTATUS(status));
+        } else if (WIFSIGNALED(status)) {
+            LOGD("killed by signal %d\n", WTERMSIG(status));
+        } else if (WIFSTOPPED(status)) {
+            LOGD("stopped by signal %d\n", WSTOPSIG(status));
+        }
+    }
+    return buf;
+}
+
+int PanController::connectPan(char *adress, char *role) {
+    pid_t pid;
+    LOGD("Connect to PAN device");
+
+    if ((pid = fork()) < 0) {
+         LOGE("fork failed (%s)", strerror(errno));
+         return -1;
+     }
+
+     if (!pid) {
+         if (execl("/system/bin/pand", "/system/bin/pand", "--nodetach", "--connect", adress,
+                   "--service", role, (char *) NULL)) {
+             LOGE("execl failed (%s)", strerror(errno));
+         }
+         LOGE("Should never get here!");
+    }
+
+    if (mPid == 0) {
+        mPid = pid;
+    } else {
+        waitpid(pid, NULL, 0);
+    }
+
+    return 0;
+}
+
+int PanController::disconnectPan(char *adress) {
+    pid_t pid;
+    LOGD("Disconnect from PAN device");
+
+    if (mPid == 0) {
+        LOGE("PAN stopped");
+        return 0;
+    }
+
+    if ((pid = fork()) < 0) {
+         LOGE("fork failed (%s)", strerror(errno));
+         return -1;
+     }
+
+    if (!pid) {
+        if (execl("/system/bin/pand", "/system/bin/pand", "--kill", adress,
+                  (char *) NULL)) {
+            LOGE("execl failed (%s)", strerror(errno));
+        }
+        LOGE("Should never get here!");
+    }
+    waitpid(pid, NULL, 0);
+
+    LOGD("Disconnected from PAN device");
+    return 0;
+}
+

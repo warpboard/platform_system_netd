@@ -31,6 +31,9 @@ public:
     int startPan();
     int stopPan();
     bool isPanStarted();
+    char* listConnectedDevices();
+    int connectPan(char *adress, char *role);
+    int disconnectPan(char *adress);
 };
 
 #endif

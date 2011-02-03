@@ -572,6 +572,28 @@ int CommandListener::PanCmd::runCommand(SocketClient *cli,
         cli->sendMsg(ResponseCode::PanStatusResult, tmp, false);
         free(tmp);
         return 0;
+    } else if (!strcmp(argv[1], "list")) {
+        char *tmp = NULL;
+        int i = 0;
+        int snd = 0;
+        tmp = sPanCtrl->listConnectedDevices();
+        while ((tmp != NULL) && (tmp[i] != '\0')) {
+            while ((tmp[i] != '\n') && (tmp[i] != '\0')) {
+                i++;
+            }
+            if (tmp[i] == '\n') {
+                tmp[i] = '\0';
+                i++;
+            }
+            cli->sendMsg(ResponseCode::BtPANListResult, &tmp[snd], false);
+            LOGD("listConnectedDevices sendMsg (%s)", &tmp[snd]);
+            snd = i;
+        }
+        free(tmp);
+    } else if (!strcmp(argv[1], "connect")) {
+        rc = sPanCtrl->connectPan(argv[2], argv[3]);
+    } else if (!strcmp(argv[1], "disconnect")) {
+        rc = sPanCtrl->disconnectPan(argv[2]);
     } else {
         cli->sendMsg(ResponseCode::CommandSyntaxError, "Unknown pan cmd", false);
         return 0;
