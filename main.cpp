@@ -64,6 +64,8 @@ int main() {
     // Set local DNS mode, to prevent bionic from proxying
     // back to this service, recursively.
     setenv("ANDROID_DNS_MODE", "local", 1);
+    // Set the size of the cache
+    setenv("ANDROID_DNS_CACHE_SIZE", "400", 1);
     dpl = new DnsProxyListener();
     if (dpl->startListener()) {
         LOGE("Unable to start DnsProxyListener (%s)", strerror(errno));
