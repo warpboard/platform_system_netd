@@ -22,75 +22,147 @@
 
 #include "NetdCommand.h"
 
+#define CONFIG_DNSPROXYWORKERPOOL_MAXTHREADS 10
+
 class DnsProxyListener : public FrameworkListener {
 public:
     DnsProxyListener();
-    virtual ~DnsProxyListener() {}
+    virtual ~DnsProxyListener();
 
 private:
-    class GetAddrInfoCmd : public NetdCommand {
+    class DnsProxyHandler {
     public:
-        GetAddrInfoCmd();
-        virtual ~GetAddrInfoCmd() {}
-        int runCommand(SocketClient *c, int argc, char** argv);
+        DnsProxyHandler(SocketClient* c) : mClient(c) {}
+        virtual ~DnsProxyHandler() {}
+        virtual void run();
+
+    protected:
+        SocketClient* mClient; // not owned
     };
 
-    class GetAddrInfoHandler {
+    class GetAddrInfoHandler : public DnsProxyHandler {
     public:
         // Note: All of host, service, and hints may be NULL
-        GetAddrInfoHandler(SocketClient *c,
+        GetAddrInfoHandler(SocketClient* c,
                            char* host,
                            char* service,
                            struct addrinfo* hints)
-            : mClient(c),
+            : DnsProxyHandler(c),
               mHost(host),
               mService(service),
               mHints(hints) {}
         ~GetAddrInfoHandler();
 
-        static void* threadStart(void* handler);
-        void start();
+        void run();
 
     private:
-        void run();
-        pthread_t mThread;
-        SocketClient* mClient;  // not owned
         char* mHost;    // owned
         char* mService; // owned
         struct addrinfo* mHints;  // owned
     };
 
     /* ------ gethostbyaddr ------*/
-    class GetHostByAddrCmd : public NetdCommand {
+    class GetHostByAddrHandler : public DnsProxyHandler {
     public:
-        GetHostByAddrCmd();
-        virtual ~GetHostByAddrCmd() {}
-        int runCommand(SocketClient *c, int argc, char** argv);
-    };
-
-    class GetHostByAddrHandler {
-    public:
-        GetHostByAddrHandler(SocketClient *c,
+        GetHostByAddrHandler(SocketClient* c,
                             char* address,
                             int   addressLen,
                             int   addressFamily)
-            : mClient(c),
+            : DnsProxyHandler(c),
               mAddress(address),
               mAddressLen(addressLen),
               mAddressFamily(addressFamily) {}
         ~GetHostByAddrHandler();
 
-        static void* threadStart(void* handler);
-        void start();
+        void run();
 
     private:
-        void run();
-        pthread_t mThread;
-        SocketClient* mClient;  // not owned
         char* mAddress;    // address to lookup
         int   mAddressLen; // length of address to look up
         int   mAddressFamily;  // address family
     };
+
+    /* DnsProxyJob is holding a reference to a handler
+     * that shall handle the job and a reference to the
+     * next job in the queue.
+     *
+     * DnsProxyWorker's queue is populated by DnsProxyJobs
+     * */
+    class DnsProxyJob {
+    public:
+        DnsProxyJob(DnsProxyHandler* handler) : mNext(NULL), mHandler(handler){}
+        ~DnsProxyJob();
+
+        void execute();
+        DnsProxyJob*        mNext;
+
+    private:
+        DnsProxyHandler*    mHandler;
+    };
+
+    /* DnsProxyWorkerPool implements a queue of
+     * DnsProxyJobs and a pool of threads. The thread
+     * gets jobs from the queue and execute the
+     * job. If there is no job in the queue the
+     * threads waits until a new is added. When
+     * a new job is added to the queue one of
+     * the threads is waken by a signal.
+     *
+     * A thread is doing its work in doWork method.
+     *
+     * */
+    class DnsProxyWorkerPool {
+    public:
+        DnsProxyWorkerPool(int numThreads);
+        ~DnsProxyWorkerPool();
+
+        void shutDown();
+        void addJob(DnsProxyJob* job);
+
+        DnsProxyJob* getNextJob(); // acquire mMutex before calling
+        bool jobPending(); // acquire mMutex before calling
+
+        pthread_mutex_t     mMutex; // guards mJobQueue, mNumRunningThreads and mIsRunning
+        pthread_cond_t      mJobAdded; // signaled when a job is added to the queue
+        pthread_cond_t      mWorkStopped; // signaled when a thread has stopped
+
+        int                 mNumRunningThreads;
+        // true while the pool is running, sets to false when pool is shutdown
+        bool                mIsRunning;
+
+    private:
+        static void*        doWork(void* pool);
+
+        int                 mNumThreads;
+        pthread_t           mThread[CONFIG_DNSPROXYWORKERPOOL_MAXTHREADS];
+
+        DnsProxyJob*        mJobQueue;
+    };
+
+    class GetAddrInfoCmd: public NetdCommand {
+    public:
+        GetAddrInfoCmd(DnsProxyWorkerPool* workerPool);
+        virtual ~GetAddrInfoCmd() {
+        }
+        int runCommand(SocketClient* c, int argc, char** argv);
+
+    private:
+        DnsProxyWorkerPool* mWorkerPool; // not owned
+    };
+
+    class GetHostByAddrCmd: public NetdCommand {
+    public:
+        GetHostByAddrCmd(DnsProxyWorkerPool* workerPool);
+        virtual ~GetHostByAddrCmd() {
+        }
+        int runCommand(SocketClient* c, int argc, char** argv);
+
+    private:
+        DnsProxyWorkerPool* mWorkerPool; // not owned
+    };
+
+    // member of DnsProxyListener
+    DnsProxyWorkerPool*     mWorkerPool;
 };
 
 #endif
