@@ -32,29 +32,27 @@
 
 #include "DnsProxyListener.h"
 
+/*******************************************************
+ *                  DnsProxyListener                   *
+ *******************************************************/
 DnsProxyListener::DnsProxyListener() :
                  FrameworkListener("dnsproxyd") {
-    registerCmd(new GetAddrInfoCmd());
-    registerCmd(new GetHostByAddrCmd());
+
+    mWorkerPool = new DnsProxyWorkerPool(CONFIG_DNSPROXYWORKERPOOL_MAXTHREADS);
+
+    registerCmd(new GetAddrInfoCmd(mWorkerPool));
+    registerCmd(new GetHostByAddrCmd(mWorkerPool));
+}
+
+DnsProxyListener::~DnsProxyListener() {
+    mWorkerPool->shutDown(); // will wait until threads are down
+    delete mWorkerPool;
 }
 
 DnsProxyListener::GetAddrInfoHandler::~GetAddrInfoHandler() {
     free(mHost);
     free(mService);
     free(mHints);
-}
-
-void DnsProxyListener::GetAddrInfoHandler::start() {
-    pthread_create(&mThread, NULL,
-                   DnsProxyListener::GetAddrInfoHandler::threadStart, this);
-}
-
-void* DnsProxyListener::GetAddrInfoHandler::threadStart(void* obj) {
-    GetAddrInfoHandler* handler = reinterpret_cast<GetAddrInfoHandler*>(obj);
-    handler->run();
-    delete handler;
-    pthread_exit(NULL);
-    return NULL;
 }
 
 // Sends 4 bytes of big-endian length, followed by the data.
@@ -65,6 +63,9 @@ static bool sendLenAndData(SocketClient *c, const int len, const void* data) {
         (len == 0 || c->sendData(data, len) == 0);
 }
 
+/*******************************************************
+ *                  GetAddrInfoHandler                 *
+ *******************************************************/
 void DnsProxyListener::GetAddrInfoHandler::run() {
     if (DBG) {
         LOGD("GetAddrInfoHandler, now for %s / %s", mHost, mService);
@@ -93,8 +94,8 @@ void DnsProxyListener::GetAddrInfoHandler::run() {
     }
 }
 
-DnsProxyListener::GetAddrInfoCmd::GetAddrInfoCmd() :
-    NetdCommand("getaddrinfo") {
+DnsProxyListener::GetAddrInfoCmd::GetAddrInfoCmd(DnsProxyWorkerPool* workerPool) :
+    NetdCommand("getaddrinfo"), mWorkerPoolRef(workerPool) {
 }
 
 int DnsProxyListener::GetAddrInfoCmd::runCommand(SocketClient *cli,
@@ -139,9 +140,12 @@ int DnsProxyListener::GetAddrInfoCmd::runCommand(SocketClient *cli,
     }
 
     DnsProxyListener::GetAddrInfoHandler* handler =
-        new DnsProxyListener::GetAddrInfoHandler(cli, name, service, hints);
-    handler->start();
+            new DnsProxyListener::GetAddrInfoHandler(cli, name, service, hints);
 
+    DnsProxyListener::DnsProxyJob* job =
+            new DnsProxyListener::DnsProxyJob::DnsProxyJob(handler);
+
+    mWorkerPoolRef->addJob(job);
 
     return 0;
 }
@@ -149,8 +153,8 @@ int DnsProxyListener::GetAddrInfoCmd::runCommand(SocketClient *cli,
 /*******************************************************
  *                  GetHostByAddr                       *
  *******************************************************/
-DnsProxyListener::GetHostByAddrCmd::GetHostByAddrCmd() :
-        NetdCommand("gethostbyaddr") {
+DnsProxyListener::GetHostByAddrCmd::GetHostByAddrCmd(DnsProxyWorkerPool* workerPool) :
+        NetdCommand("gethostbyaddr"), mWorkerPoolRef(workerPool) {
 }
 
 int DnsProxyListener::GetHostByAddrCmd::runCommand(SocketClient *cli,
@@ -168,26 +172,17 @@ int DnsProxyListener::GetHostByAddrCmd::runCommand(SocketClient *cli,
 
     DnsProxyListener::GetHostByAddrHandler* handler =
             new DnsProxyListener::GetHostByAddrHandler(cli, addr, addrLen, addrFamily);
-    handler->start();
+
+    DnsProxyListener::DnsProxyJob* job =
+            new DnsProxyListener::DnsProxyJob::DnsProxyJob(handler);
+
+    mWorkerPoolRef->addJob(job);
 
     return 0;
 }
 
 DnsProxyListener::GetHostByAddrHandler::~GetHostByAddrHandler() {
     free(mAddress);
-}
-
-void DnsProxyListener::GetHostByAddrHandler::start() {
-    pthread_create(&mThread, NULL,
-                   DnsProxyListener::GetHostByAddrHandler::threadStart, this);
-}
-
-void* DnsProxyListener::GetHostByAddrHandler::threadStart(void* obj) {
-    GetHostByAddrHandler* handler = reinterpret_cast<GetHostByAddrHandler*>(obj);
-    handler->run();
-    delete handler;
-    pthread_exit(NULL);
-    return NULL;
 }
 
 void DnsProxyListener::GetHostByAddrHandler::run() {
@@ -220,4 +215,149 @@ void DnsProxyListener::GetHostByAddrHandler::run() {
     if (!success) {
         LOGW("GetHostByAddrHandler: Error writing DNS result to client\n");
     }
+}
+
+/*********************************************************
+ *                DnsProxyWorkerPool                     *
+ *********************************************************/
+DnsProxyListener::DnsProxyWorkerPool::DnsProxyWorkerPool(int noOfThreads) {
+
+    pthread_mutex_init(&mMutex, NULL);
+    pthread_cond_init(&mJobAdded, NULL);
+    pthread_cond_init(&mWorkStopped, NULL);
+
+    if (noOfThreads < 1 || noOfThreads > CONFIG_DNSPROXYWORKERPOOL_MAXTHREADS) {
+        mNoOfThreads = CONFIG_DNSPROXYWORKERPOOL_MAXTHREADS;
+    } else {
+        mNoOfThreads = noOfThreads;
+    }
+
+    mWork = true;
+
+    mNoOfRunningThreads = 0;
+
+    mJobQueue = new DnsProxyJob(NULL);
+    mJobQueue->mNext = NULL;
+
+    for (int i = 0; i < mNoOfThreads; i++) {
+        pthread_create(&mThread[i], NULL,
+                DnsProxyListener::DnsProxyWorkerPool::doWork, this);
+    }
+
+    if (DBG) {
+        LOGD("DnsProxyWorkerPool created\n");
+    }
+}
+
+DnsProxyListener::DnsProxyWorkerPool::~DnsProxyWorkerPool() {
+    delete mJobQueue;
+}
+
+void DnsProxyListener::DnsProxyWorkerPool::shutDown() {
+    pthread_mutex_lock(&mMutex);
+    if (mWork) {
+        mWork = false;
+        pthread_cond_broadcast(&mJobAdded);
+        while (mNoOfRunningThreads > 0) {
+            pthread_cond_wait(&mWorkStopped, &mMutex);
+        }
+    }
+    DnsProxyJob* job;
+    while ((job = getNextJob()) != NULL) {
+        delete job;
+    }
+    pthread_mutex_unlock(&mMutex);
+}
+
+void* DnsProxyListener::DnsProxyWorkerPool::doWork(void* pool) {
+    DnsProxyWorkerPool* tp =
+            reinterpret_cast<DnsProxyWorkerPool *> (pool);
+
+    pthread_mutex_lock(&tp->mMutex);
+    int id = tp->mNoOfRunningThreads;
+    tp->mNoOfRunningThreads++;
+    pthread_mutex_unlock(&tp->mMutex);
+
+    if (DBG) {
+        LOGD("DnsProxyWorker %d is working\n", id);
+    }
+
+    while (1) {
+        pthread_mutex_lock(&tp->mMutex);
+
+        while (!tp->jobExist() && tp->mWork) {
+            if (DBG) {
+                LOGD("DnsProxyWorker %d waiting for job\n", id);
+            }
+            pthread_cond_wait(&tp->mJobAdded, &tp->mMutex);
+        }
+
+        if (!tp->mWork) {
+            break;
+        }
+
+        DnsProxyJob* job = tp->getNextJob();
+
+        pthread_mutex_unlock(&tp->mMutex);
+
+        if (DBG) {
+            LOGD("DnsProxyWorker %d is doing a job\n", id);
+        }
+
+        job->execute();
+
+        delete job;
+    }
+
+    if (DBG) {
+        LOGD("DnsProxyWorker %d has stopped working\n", id);
+    }
+
+    tp->mNoOfRunningThreads--;
+    pthread_cond_signal(&tp->mWorkStopped);
+
+    pthread_mutex_unlock(&tp->mMutex);
+
+    pthread_exit(NULL);
+    return NULL;
+}
+
+void DnsProxyListener::DnsProxyWorkerPool::addJob(DnsProxyJob* job) {
+
+    pthread_mutex_lock(&mMutex);
+
+    DnsProxyJob* last;
+    for (last = mJobQueue; last->mNext; last = last->mNext);
+
+    last->mNext = job;
+
+    pthread_cond_signal(&mJobAdded);
+
+    pthread_mutex_unlock(&mMutex);
+}
+
+DnsProxyListener::DnsProxyJob* DnsProxyListener::DnsProxyWorkerPool::getNextJob() {
+    DnsProxyJob* nextJob;
+
+    nextJob = mJobQueue->mNext;
+    mJobQueue->mNext = nextJob->mNext;
+
+    return nextJob;
+}
+
+bool DnsProxyListener::DnsProxyWorkerPool::jobExist() {
+    return mJobQueue->mNext != NULL;
+}
+
+/*********************************************************
+ *                    DnsProxyJob                        *
+ *********************************************************/
+void DnsProxyListener::DnsProxyJob::execute() {
+    if (mHandler != NULL) {
+        mHandler->run();
+    }
+}
+
+DnsProxyListener::DnsProxyJob::~DnsProxyJob() {
+    delete mHandler;
 }
