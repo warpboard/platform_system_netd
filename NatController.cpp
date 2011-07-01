@@ -93,12 +93,10 @@ int NatController::doNatCommands(const char *intIface, const char *extIface, boo
 
     // handle decrement to 0 case (do reset to defaults) and erroneous dec below 0
     if (add == false) {
-        if (natCount <= 1) {
-            int ret = setDefaults();
-            if (ret == 0) {
-                natCount=0;
-            }
-            return ret;
+        if (natCount < 1) {
+            //do nothing if natCount is 0
+            natCount = 0;
+            return -1;
         }
     }
 
@@ -118,12 +116,14 @@ int NatController::doNatCommands(const char *intIface, const char *extIface, boo
 
     snprintf(cmd, sizeof(cmd), "-%s FORWARD -i %s -o %s -j ACCEPT", (add ? "A" : "D"),
             intIface, extIface);
-    if (runIptablesCmd(cmd)) {
+    if (runIptablesCmd(cmd) && add) {
         // unwind what's been done, but don't care about success - what more could we do?
         snprintf(cmd, sizeof(cmd),
                  "-%s FORWARD -i %s -o %s -m state --state ESTABLISHED,RELATED -j ACCEPT",
                  (!add ? "A" : "D"),
                  extIface, intIface);
+        //only try to unwind when add policy
+        runIptablesCmd(cmd);
         return -1;
     }
 
@@ -132,9 +132,19 @@ int NatController::doNatCommands(const char *intIface, const char *extIface, boo
         snprintf(cmd, sizeof(cmd), "-t nat -A POSTROUTING -o %s -j MASQUERADE", extIface);
         if (runIptablesCmd(cmd)) {
             // unwind what's been done, but don't care about success - what more could we do?
-            setDefaults();;
+            snprintf(cmd, sizeof(cmd),
+                 "-%s FORWARD -i %s -o %s -m state --state ESTABLISHED,RELATED -j ACCEPT",
+                 (!add ? "A" : "D"),
+                 extIface, intIface);
+            runIptablesCmd(cmd);
+            snprintf(cmd, sizeof(cmd), "-%s FORWARD -i %s -o %s -j ACCEPT", (!add ? "A" : "D"),
+                 intIface, extIface);
+            runIptablesCmd(cmd);
             return -1;
         }
+    } else if (!add && natCount == 1) {
+        snprintf(cmd, sizeof(cmd), "-t nat -D POSTROUTING -o %s -j MASQUERADE", extIface);
+        runIptablesCmd(cmd);
     }
 
     if (add) {
