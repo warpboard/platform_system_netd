@@ -24,6 +24,8 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <string.h>
+#include <resolv.h>
+#include <net/if.h>
 
 #define LOG_TAG "DnsProxyListener"
 #define DBG 0
@@ -43,6 +45,7 @@ DnsProxyListener::GetAddrInfoHandler::~GetAddrInfoHandler() {
     free(mHost);
     free(mService);
     free(mHints);
+    free(mIface);
 }
 
 void DnsProxyListener::GetAddrInfoHandler::start() {
@@ -68,11 +71,17 @@ static bool sendLenAndData(SocketClient *c, const int len, const void* data) {
 
 void DnsProxyListener::GetAddrInfoHandler::run() {
     if (DBG) {
-        LOGD("GetAddrInfoHandler, now for %s / %s", mHost, mService);
+        LOGD("GetAddrInfoHandler, now for %s / %s / %s", mHost, mService, mIface);
     }
 
+    if (mIface == NULL) {
+        char tmp[IF_NAMESIZE + 1];
+        if (_resolv_get_pids_associated_interface(mPid, tmp, sizeof(tmp)) > 0) {
+            mIface = strdup(tmp);
+        }
+    }
     struct addrinfo* result = NULL;
-    int rv = getaddrinfo(mHost, mService, mHints, &result);
+    int rv = getaddrinfoe(mHost, mService, mHints, mIface, &result);
     bool success = (mClient->sendData(&rv, sizeof(rv)) == 0);
     if (rv == 0) {
         struct addrinfo* ai = result;
@@ -106,7 +115,7 @@ int DnsProxyListener::GetAddrInfoCmd::runCommand(SocketClient *cli,
             LOGD("argv[%i]=%s", i, argv[i]);
         }
     }
-    if (argc != 7) {
+    if (argc != 9) {
         LOGW("Invalid number of arguments to getaddrinfo: %i", argc);
         sendLenAndData(cli, 0, NULL);
         return -1;
@@ -126,11 +135,20 @@ int DnsProxyListener::GetAddrInfoCmd::runCommand(SocketClient *cli,
         service = strdup(service);
     }
 
+    char* iface = argv[7];
+    if (strcmp(iface, "^") == 0) {
+        iface = NULL;
+    } else {
+        iface = strdup(iface);
+    }
+
     struct addrinfo* hints = NULL;
     int ai_flags = atoi(argv[3]);
     int ai_family = atoi(argv[4]);
     int ai_socktype = atoi(argv[5]);
     int ai_protocol = atoi(argv[6]);
+    int pid = atoi(argv[8]);
+
     if (ai_flags != -1 || ai_family != -1 ||
         ai_socktype != -1 || ai_protocol != -1) {
         hints = (struct addrinfo*) calloc(1, sizeof(struct addrinfo));
@@ -148,7 +166,7 @@ int DnsProxyListener::GetAddrInfoCmd::runCommand(SocketClient *cli,
 
     cli->incRef();
     DnsProxyListener::GetAddrInfoHandler* handler =
-        new DnsProxyListener::GetAddrInfoHandler(cli, name, service, hints);
+        new DnsProxyListener::GetAddrInfoHandler(cli, name, service, hints, iface, pid);
     handler->start();
 
     return 0;
@@ -168,7 +186,7 @@ int DnsProxyListener::GetHostByAddrCmd::runCommand(SocketClient *cli,
             LOGD("argv[%i]=%s", i, argv[i]);
         }
     }
-    if (argc != 4) {
+    if (argc != 5) {
         LOGW("Invalid number of arguments to gethostbyaddr: %i", argc);
         sendLenAndData(cli, 0, NULL);
         return -1;
@@ -177,6 +195,7 @@ int DnsProxyListener::GetHostByAddrCmd::runCommand(SocketClient *cli,
     char* addrStr = argv[1];
     int addrLen = atoi(argv[2]);
     int addrFamily = atoi(argv[3]);
+    int pid = atoi(argv[4]);
 
     void* addr = malloc(sizeof(struct in6_addr));
     errno = 0;
@@ -190,7 +209,7 @@ int DnsProxyListener::GetHostByAddrCmd::runCommand(SocketClient *cli,
 
     cli->incRef();
     DnsProxyListener::GetHostByAddrHandler* handler =
-            new DnsProxyListener::GetHostByAddrHandler(cli, addr, addrLen, addrFamily);
+            new DnsProxyListener::GetHostByAddrHandler(cli, addr, addrLen, addrFamily, pid);
     handler->start();
 
     return 0;
@@ -218,10 +237,15 @@ void DnsProxyListener::GetHostByAddrHandler::run() {
         LOGD("DnsProxyListener::GetHostByAddrHandler::run\n");
     }
 
+    char buff[IF_NAMESIZE + 1], *iface = NULL;
+    if (_resolv_get_pids_associated_interface(mPid, buff, sizeof(buff)) > 0) {
+        iface = buff;
+    }
+
     struct hostent* hp;
 
     // NOTE gethostbyaddr should take a void* but bionic thinks it should be char*
-    hp = gethostbyaddr((char*)mAddress, mAddressLen, mAddressFamily);
+    hp = gethostbyaddre((char*)mAddress, mAddressLen, mAddressFamily, iface);
 
     if (DBG) {
         LOGD("GetHostByAddrHandler::run gethostbyaddr errno: %s hp->h_name = %s, name_len = %d\n",

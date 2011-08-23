@@ -73,3 +73,23 @@ int ResolverController::flushInterfaceDnsCache(const char* iface) {
 
     return 0;
 }
+
+int ResolverController::attachPidToDnsCache(const char* iface, int pid) {
+    if (DBG) {
+        LOGD("attachPidToDnsCache iface = %s, pid = %d\n", iface, pid);
+    }
+
+    _resolv_attach_pid_to_cache(iface, pid);
+
+    return 0;
+}
+
+int ResolverController::detachPidFromDnsCache(const char* iface, int pid) {
+    if (DBG) {
+        LOGD("detachPidFromDnsCache iface = %s, pid = %d\n", iface, pid);
+    }
+
+    _resolv_detached_pid_from_cache(iface, pid);
+
+    return 0;
+}

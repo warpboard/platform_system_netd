@@ -830,6 +830,22 @@ int CommandListener::ResolverCmd::runCommand(SocketClient *cli, int argc, char *
                     "Wrong number of arguments to resolver setdefaultif", false);
             return 0;
         }
+    } else if (!strcmp(argv[1], "attachpid")) { // resolver attachpid <iface> <pid>
+        if (argc == 4) {
+            rc = sResolverCtrl->attachPidToDnsCache(argv[2], atoi(argv[3]));
+        } else {
+            cli->sendMsg(ResponseCode::CommandSyntaxError,
+                    "Wrong number of arguments to resolver attachpid", false);
+            return 0;
+        }
+    } else if (!strcmp(argv[1], "detachpid")) { // resolver detachpid <iface> <pid>
+        if (argc == 4) {
+            rc = sResolverCtrl->detachPidFromDnsCache(argv[2], atoi(argv[3]));
+        } else {
+            cli->sendMsg(ResponseCode::CommandSyntaxError,
+                    "Wrong number of arguments to resolver detachpid", false);
+            return 0;
+        }
     } else {
         cli->sendMsg(ResponseCode::CommandSyntaxError,"Resolver unknown command", false);
         return 0;
