@@ -40,11 +40,15 @@ private:
         GetAddrInfoHandler(SocketClient *c,
                            char* host,
                            char* service,
-                           struct addrinfo* hints)
+                           struct addrinfo* hints,
+                           char* iface,
+                           int pid)
             : mClient(c),
               mHost(host),
               mService(service),
-              mHints(hints) {}
+              mHints(hints),
+              mIface(iface),
+              mPid(pid) {}
         ~GetAddrInfoHandler();
 
         static void* threadStart(void* handler);
@@ -56,6 +60,8 @@ private:
         char* mHost;    // owned
         char* mService; // owned
         struct addrinfo* mHints;  // owned
+        char* mIface; // owned
+        int mPid;
     };
 
     /* ------ gethostbyaddr ------*/
@@ -71,11 +77,15 @@ private:
         GetHostByAddrHandler(SocketClient *c,
                             void* address,
                             int   addressLen,
-                            int   addressFamily)
+                            int   addressFamily,
+                            char* iface,
+                            int   pid)
             : mClient(c),
               mAddress(address),
               mAddressLen(addressLen),
-              mAddressFamily(addressFamily) {}
+              mAddressFamily(addressFamily),
+              mIface(iface),
+              mPid(pid) {}
         ~GetHostByAddrHandler();
 
         static void* threadStart(void* handler);
@@ -87,6 +97,8 @@ private:
         void* mAddress;    // address to lookup; owned
         int   mAddressLen; // length of address to look up
         int   mAddressFamily;  // address family
+        char* mIface; // owned
+        int   mPid;
     };
 };
 
