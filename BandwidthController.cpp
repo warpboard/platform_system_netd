@@ -206,7 +206,7 @@ int BandwidthController::runIptablesCmd(const char *cmd, IptRejectOp rejectHandl
             fullCmd += " icmp-net-prohibited";
             break;
         case IptIpV6:
-            fullCmd += " icmp6-adm-prohibited";
+            fullCmd += " icmp6-no-route";
             break;
         }
     }
