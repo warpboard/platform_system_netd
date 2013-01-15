@@ -71,6 +71,8 @@ int NatController::setupIptablesHooks() {
 int NatController::setDefaults() {
     if (runCmd(IPTABLES_PATH, "-F natctrl_FORWARD"))
         return -1;
+    if (runCmd(IPTABLES_PATH, "-A natctrl_FORWARD -j DROP"))
+        return -1;
     if (runCmd(IPTABLES_PATH, "-t nat -F natctrl_nat_POSTROUTING"))
         return -1;
 
@@ -125,7 +127,7 @@ int NatController::enableNat(const int argc, char **argv) {
         runCmd(IP_PATH, "route flush cache");
     }
 
-    if (ret != 0 || setForwardRules(true, intIface, extIface) != 0) {
+    if (ret != 0) {
         if (tableNumber != -1) {
             for (i = 0; i < addrCount; i++) {
                 secondaryTableCtrl->modifyLocalRoute(tableNumber, DEL, intIface, argv[5+i]);
@@ -134,21 +136,15 @@ int NatController::enableNat(const int argc, char **argv) {
             }
             runCmd(IP_PATH, "route flush cache");
         }
-        ALOGE("Error setting forward rules");
+        ALOGE("Error setting route rules");
         errno = ENODEV;
         return -1;
     }
 
-    /* Always make sure the drop rule is at the end */
-    snprintf(cmd, sizeof(cmd), "-D natctrl_FORWARD -j DROP");
-    runCmd(IPTABLES_PATH, cmd);
-    snprintf(cmd, sizeof(cmd), "-A natctrl_FORWARD -j DROP");
-    runCmd(IPTABLES_PATH, cmd);
-
-
-    natCount++;
     // add this if we are the first added nat
-    if (natCount == 1) {
+    // *IMPORTANT* Must seting postroute rule before seting forward rules, otherwise some packets
+    // may be sent to network without translating source IP correctly!!
+    if (natCount == 0) {
         snprintf(cmd, sizeof(cmd), "-t nat -A natctrl_nat_POSTROUTING -o %s -j MASQUERADE", extIface);
         if (runCmd(IPTABLES_PATH, cmd)) {
             ALOGE("Error seting postroute rule: %s", cmd);
@@ -163,6 +159,34 @@ int NatController::enableNat(const int argc, char **argv) {
         }
     }
 
+
+    // *IMPORTANT* Must seting forward rules after seting postroute rules, otherwise some packets
+    // may be sent to network without translating source IP correctly!!
+    if (setForwardRules(true, intIface, extIface) != 0) {
+        if (tableNumber != -1) {
+            for (i = 0; i < addrCount; i++) {
+                secondaryTableCtrl->modifyLocalRoute(tableNumber, DEL, intIface, argv[5+i]);
+
+                secondaryTableCtrl->modifyFromRule(tableNumber, DEL, argv[5+i]);
+            }
+            runCmd(IP_PATH, "route flush cache");
+        }
+        if (natCount == 0) {
+            setDefaults();
+        }
+        ALOGE("Error setting forward rules");
+        errno = ENODEV;
+        return -1;
+    }
+
+    /* Always make sure the drop rule is at the end */
+    snprintf(cmd, sizeof(cmd), "-D natctrl_FORWARD -j DROP");
+    runCmd(IPTABLES_PATH, cmd);
+    snprintf(cmd, sizeof(cmd), "-A natctrl_FORWARD -j DROP");
+    runCmd(IPTABLES_PATH, cmd);
+
+
+    natCount++;
     return 0;
 }
 
