@@ -18,6 +18,7 @@
 #define _NAT_CONTROLLER_H
 
 #include <linux/in.h>
+#include <string>
 
 #include "SecondaryTableController.h"
 
@@ -36,12 +37,15 @@ public:
 
 private:
     int natCount;
+    std::string mExtIface;
     SecondaryTableController *secondaryTableCtrl;
 
     int setDefaults();
     int runCmd(const char *path, const char *cmd);
     bool checkInterface(const char *iface);
     int setForwardRules(bool set, const char *intIface, const char *extIface);
+    bool isExtIfaceChanged(const char *extIface);
+    void handleExtIfaceChanged(const char *extIface);
 };
 
 #endif
