@@ -83,6 +83,7 @@ int NatController::setDefaults() {
     runCmd(IP_PATH, "route flush cache");
 
     natCount = 0;
+    mExtIface.clear();
 
     return 0;
 }
@@ -102,6 +103,7 @@ int NatController::enableNat(const int argc, char **argv) {
     const char *intIface = argv[2];
     const char *extIface = argv[3];
     int tableNumber;
+    bool extIfaceUpdate = false;
 
     if (!checkInterface(intIface) || !checkInterface(extIface)) {
         ALOGE("Invalid interface specified");
@@ -113,6 +115,12 @@ int NatController::enableNat(const int argc, char **argv) {
         ALOGE("Missing Argument");
         errno = EINVAL;
         return -1;
+    }
+
+    // Check whether the extIface has changed while at least one internal interface is handeled by NAT
+    extIfaceUpdate = isExtIfaceChanged(extIface);
+    if(extIfaceUpdate){
+        handleExtIfaceChanged(extIface);
     }
 
     tableNumber = secondaryTableCtrl->findTableNumber(extIface);
@@ -148,15 +156,18 @@ int NatController::enableNat(const int argc, char **argv) {
 
     natCount++;
     // add this if we are the first added nat
-    if (natCount == 1) {
+    if (natCount == 1 || extIfaceUpdate) {
+        // Update the external interface name
+        mExtIface = std::string(extIface);
         snprintf(cmd, sizeof(cmd), "-t nat -A natctrl_nat_POSTROUTING -o %s -j MASQUERADE", extIface);
         if (runCmd(IPTABLES_PATH, cmd)) {
             ALOGE("Error seting postroute rule: %s", cmd);
             // unwind what's been done, but don't care about success - what more could we do?
-            for (i = 0; i < addrCount; i++) {
-                secondaryTableCtrl->modifyLocalRoute(tableNumber, DEL, intIface, argv[5+i]);
-
-                secondaryTableCtrl->modifyFromRule(tableNumber, DEL, argv[5+i]);
+            if (tableNumber != -1) {
+                for (i = 0; i < addrCount; i++) {
+                    secondaryTableCtrl->modifyLocalRoute(tableNumber, DEL, intIface, argv[5+i]);
+                    secondaryTableCtrl->modifyFromRule(tableNumber, DEL, argv[5+i]);
+                }
             }
             setDefaults();
             return -1;
@@ -253,4 +264,24 @@ int NatController::disableNat(const int argc, char **argv) {
         setDefaults();
     }
     return 0;
+}
+
+// Method to check whether the external interface has changed while at least one internal interface is handeled by NAT
+bool NatController::isExtIfaceChanged(const char *extIface){
+    // We check that at least one internal interface is handeled by NAT
+    if( natCount > 0) {
+        std::string aIface(extIface);
+        // In this case check that the new extIface name is different from the current extIface name
+        if(mExtIface != aIface) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Action to do when the external interface has changed while at least one internal interface is handeled by NAT
+void NatController::handleExtIfaceChanged(const char *extIface){
+    int tmpNatCount = natCount;
+    setDefaults();
+    natCount = tmpNatCount;
 }
