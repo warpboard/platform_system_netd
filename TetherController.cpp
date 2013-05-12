@@ -135,7 +135,12 @@ int TetherController::startTethering(int num_addrs, struct in_addr* addrs) {
             close(pipefd[0]);
         }
 
-        int num_processed_args = 7 + (num_addrs/2) + 1; // 1 null for termination
+	int num_tethered_interfaces = 0;
+	InterfaceCollection::iterator it;
+	for (it = mInterfaces->begin(); it != mInterfaces->end(); ++it)
+	    num_tethered_interfaces++;
+	int num_processed_args = 7 + (num_addrs/2)
+		+ num_tethered_interfaces + 1; // 1 null for termination
         char **args = (char **)malloc(sizeof(char *) * num_processed_args);
         args[num_processed_args - 1] = NULL;
         args[0] = (char *)"/system/bin/dnsmasq";
@@ -153,6 +158,11 @@ int TetherController::startTethering(int num_addrs, struct in_addr* addrs) {
             char *end = strdup(inet_ntoa(addrs[addrIndex++]));
             asprintf(&(args[nextArg++]),"--dhcp-range=%s,%s,1h", start, end);
         }
+
+	// DNS proxy listens on only internal LAN interface(s)
+	for (it = mInterfaces->begin(); it != mInterfaces->end(); ++it) {
+	    asprintf(&(args[nextArg++]), "--interface=%s", *it);
+	}
 
         if (execv(args[0], args)) {
             ALOGE("execl failed (%s)", strerror(errno));
