@@ -22,23 +22,39 @@
 #include "NetdCommand.h"
 #include "UidMarkMap.h"
 
+class DnsProxyWorkerPool;
+
 class DnsProxyListener : public FrameworkListener {
 public:
     DnsProxyListener(UidMarkMap *map);
-    virtual ~DnsProxyListener() {}
+    virtual ~DnsProxyListener();
 
+    friend class DnsProxyJob;
 private:
     UidMarkMap *mUidMarkMap;
+    DnsProxyWorkerPool* mWorkerPool;
+
+    class DnsProxyHandler {
+    public:
+        DnsProxyHandler(SocketClient* c);
+        virtual ~DnsProxyHandler();
+        virtual void run() = 0;
+
+    protected:
+        SocketClient* mClient; // ref counted
+    };
+
     class GetAddrInfoCmd : public NetdCommand {
     public:
-        GetAddrInfoCmd(UidMarkMap *uidMarkMap);
+        GetAddrInfoCmd(UidMarkMap *uidMarkMap, DnsProxyWorkerPool* workerPool);
         virtual ~GetAddrInfoCmd() {}
         int runCommand(SocketClient *c, int argc, char** argv);
     private:
         UidMarkMap *mUidMarkMap;
+        DnsProxyWorkerPool* mWorkerPool; // not owned
     };
 
-    class GetAddrInfoHandler {
+    class GetAddrInfoHandler : public DnsProxyHandler {
     public:
         // Note: All of host, service, and hints may be NULL
         GetAddrInfoHandler(SocketClient *c,
@@ -51,12 +67,8 @@ private:
                            int mark);
         ~GetAddrInfoHandler();
 
-        static void* threadStart(void* handler);
-        void start();
-
-    private:
         void run();
-        SocketClient* mClient;  // ref counted
+    private:
         char* mHost;    // owned
         char* mService; // owned
         struct addrinfo* mHints;  // owned
@@ -69,14 +81,15 @@ private:
     /* ------ gethostbyname ------*/
     class GetHostByNameCmd : public NetdCommand {
     public:
-        GetHostByNameCmd(UidMarkMap *uidMarkMap);
+        GetHostByNameCmd(UidMarkMap *uidMarkMap, DnsProxyWorkerPool* workerPool);
         virtual ~GetHostByNameCmd() {}
         int runCommand(SocketClient *c, int argc, char** argv);
     private:
         UidMarkMap *mUidMarkMap;
+        DnsProxyWorkerPool* mWorkerPool; // not owned
     };
 
-    class GetHostByNameHandler {
+    class GetHostByNameHandler : public DnsProxyHandler {
     public:
         GetHostByNameHandler(SocketClient *c,
                             pid_t pid,
@@ -86,11 +99,9 @@ private:
                             int af,
                             int mark);
         ~GetHostByNameHandler();
-        static void* threadStart(void* handler);
-        void start();
-    private:
+
         void run();
-        SocketClient* mClient; //ref counted
+    private:
         pid_t mPid;
         uid_t mUid;
         char* mIface; // owned
@@ -102,14 +113,15 @@ private:
     /* ------ gethostbyaddr ------*/
     class GetHostByAddrCmd : public NetdCommand {
     public:
-        GetHostByAddrCmd(UidMarkMap *uidMarkMap);
+        GetHostByAddrCmd(UidMarkMap *uidMarkMap, DnsProxyWorkerPool* workerPool);
         virtual ~GetHostByAddrCmd() {}
         int runCommand(SocketClient *c, int argc, char** argv);
     private:
         UidMarkMap *mUidMarkMap;
+        DnsProxyWorkerPool* mWorkerPool; // not owned
     };
 
-    class GetHostByAddrHandler {
+    class GetHostByAddrHandler : public DnsProxyHandler {
     public:
         GetHostByAddrHandler(SocketClient *c,
                             void* address,
@@ -121,12 +133,9 @@ private:
                             int mark);
         ~GetHostByAddrHandler();
 
-        static void* threadStart(void* handler);
-        void start();
+        void run();
 
     private:
-        void run();
-        SocketClient* mClient;  // ref counted
         void* mAddress;    // address to lookup; owned
         int   mAddressLen; // length of address to look up
         int   mAddressFamily;  // address family
