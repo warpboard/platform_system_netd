@@ -143,10 +143,11 @@ int TetherController::startTethering(int num_addrs, struct in_addr* addrs) {
         args[3] = (char *)"--no-poll";
         // TODO: pipe through metered status from ConnService
         args[4] = (char *)"--dhcp-option-force=43,ANDROID_METERED";
-        args[5] = (char *)"--pid-file";
-        args[6] = (char *)"";
+        args[5] = (char *)"--dhcp-authoritative";
+        args[6] = (char *)"--pid-file";
+        args[7] = (char *)"";
 
-        int nextArg = 7;
+        int nextArg = 8;
         for (int addrIndex=0; addrIndex < num_addrs;) {
             char *start = strdup(inet_ntoa(addrs[addrIndex++]));
             char *end = strdup(inet_ntoa(addrs[addrIndex++]));
