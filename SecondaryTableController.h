@@ -20,8 +20,8 @@
 #include <sysutils/FrameworkListener.h>
 
 #include <net/if.h>
-#include "UidMarkMap.h"
 #include "NetdConstants.h"
+#include "NetworkController.h"
 
 #ifndef IFNAMSIZ
 #define IFNAMSIZ 16
@@ -37,7 +37,7 @@ static const char *RULE_PRIO = "100";
 class SecondaryTableController {
 
 public:
-    SecondaryTableController(UidMarkMap *map);
+    SecondaryTableController(NetworkController* controller);
     virtual ~SecondaryTableController();
 
     int addRoute(SocketClient *cli, char *iface, char *dest, int prefixLen, char *gateway);
@@ -66,7 +66,7 @@ public:
 
 
 private:
-    UidMarkMap *mUidMarkMap;
+    NetworkController *mNetCtrl;
 
     int setUidRule(const char* iface, int uid_start, int uid_end, bool add);
     int setFwmarkRule(const char *iface, bool add);
