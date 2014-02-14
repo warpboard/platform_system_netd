@@ -42,7 +42,8 @@ const char* SecondaryTableController::LOCAL_MANGLE_IFACE_FORMAT = "st_mangle_%s_
 const char* SecondaryTableController::LOCAL_NAT_POSTROUTING = "st_nat_POSTROUTING";
 const char* SecondaryTableController::LOCAL_FILTER_OUTPUT = "st_filter_OUTPUT";
 
-SecondaryTableController::SecondaryTableController(UidMarkMap *map) : mUidMarkMap(map) {
+SecondaryTableController::SecondaryTableController(NetworkController* controller) :
+        mNetCtrl(controller) {
     int i;
     for (i=0; i < INTERFACES_TRACKED; i++) {
         mInterfaceTable[i][0] = 0;
@@ -313,16 +314,16 @@ int SecondaryTableController::setFwmarkRule(const char *iface, bool add) {
         // Ensure null termination even if truncation happened
         mInterfaceTable[tableIndex][IFNAMSIZ] = 0;
     }
-    int mark = tableIndex + BASE_TABLE_NUMBER;
-    char mark_str[11];
-    int ret;
+    int mark = mNetCtrl->getNetworkId(iface);
 
-    //fail fast if any rules already exist for this interface
-    if (mUidMarkMap->anyRulesForMark(mark)) {
+    // Fail fast if any rules already exist for this interface
+    if (mInterfaceRuleCount[mark] > 0) {
         errno = EBUSY;
         return -1;
     }
 
+    int ret;
+    char mark_str[11];
     snprintf(mark_str, sizeof(mark_str), "%d", mark);
     //add the catch all route to the tun. Route rules will make sure the right packets hit the table
     const char *route_cmd[] = {
@@ -520,7 +521,7 @@ int SecondaryTableController::setFwmarkRoute(const char* iface, const char *dest
         errno = EINVAL;
         return -1;
     }
-    int mark = tableIndex + BASE_TABLE_NUMBER;
+    int mark = mNetCtrl->getNetworkId(iface);
     char mark_str[11] = {0};
     char chain_str[IFNAMSIZ + 18];
     char dest_str[44]; // enough to store an IPv6 address + 3 character bitmask
@@ -556,18 +557,12 @@ int SecondaryTableController::setUidRule(const char *iface, int uid_start, int u
         errno = EINVAL;
         return -1;
     }
-    int mark = tableIndex + BASE_TABLE_NUMBER;
-    if (add) {
-        if (!mUidMarkMap->add(uid_start, uid_end, mark)) {
-            errno = EINVAL;
-            return -1;
-        }
-    } else {
-        if (!mUidMarkMap->remove(uid_start, uid_end, mark)) {
-            errno = EINVAL;
-            return -1;
-        }
+    int netid = mNetCtrl->getNetworkId(iface);
+    if (!mNetCtrl->setNetworkForUidRange(uid_start, uid_end, add ? netid : 0, false)) {
+        errno = EINVAL;
+        return -1;
     }
+
     char uid_str[24] = {0};
     char chain_str[IFNAMSIZ + 18];
     snprintf(uid_str, sizeof(uid_str), "%d-%d", uid_start, uid_end);
@@ -627,9 +622,9 @@ int SecondaryTableController::setHostExemption(const char *host, bool add) {
 }
 
 void SecondaryTableController::getUidMark(SocketClient *cli, int uid) {
-    int mark = mUidMarkMap->getMark(uid);
+    int netid = mNetCtrl->getNetwork(uid, 0, 0, false);
     char mark_str[11];
-    snprintf(mark_str, sizeof(mark_str), "%d", mark);
+    snprintf(mark_str, sizeof(mark_str), "%d", netid);
     cli->sendMsg(ResponseCode::GetMarkResult, mark_str, false);
 }
 
