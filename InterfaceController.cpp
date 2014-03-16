@@ -39,7 +39,11 @@
 
 #include "InterfaceController.h"
 
+#if defined(__LP64__)
+char if_cmd_lib_file_name[] = "/system/lib64/libnetcmdiface.so";
+#else
 char if_cmd_lib_file_name[] = "/system/lib/libnetcmdiface.so";
+#endif
 char set_cmd_func_name[] = "net_iface_send_command";
 char set_cmd_init_func_name[] = "net_iface_send_command_init";
 char set_cmd_fini_func_name[] = "net_iface_send_command_fini";
