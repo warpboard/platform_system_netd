@@ -189,7 +189,7 @@ CommandListener::CommandListener(UidMarkMap *map) :
     createChildChains(V4V6, "mangle", "POSTROUTING", MANGLE_POSTROUTING);
     createChildChains(V4V6, "mangle", "OUTPUT", MANGLE_OUTPUT);
     createChildChains(V4, "nat", "PREROUTING", NAT_PREROUTING);
-    createChildChains(V4, "nat", "POSTROUTING", NAT_POSTROUTING);
+    createChildChains(V4V6, "nat", "POSTROUTING", NAT_POSTROUTING);
 
     // Let each module setup their child chains
     setupOemIptablesHook();
